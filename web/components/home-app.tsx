@@ -240,6 +240,9 @@ export function HomeApp() {
           <p className="muted" style={{ margin: 0 }}>
             Pick or search for a thinker. Results use Parallel Search (news from 2026, major outlets) and Parallel Extract when you open a story.
           </p>
+          <p className="muted" style={{ margin: "0.65rem 0 0", fontSize: "0.88rem" }}>
+            <a href="/compare">Open Parallel API compare</a> — Task lenses, FindAll, and Search side by side.
+          </p>
         </div>
         {thinker ? (
           <button type="button" className="refreshBtn" onClick={() => void onRefresh()} disabled={mainLoading} title="Fetch five new articles">

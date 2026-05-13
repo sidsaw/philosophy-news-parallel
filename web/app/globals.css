@@ -317,3 +317,86 @@ code {
   margin-bottom: 1rem;
   font-size: 0.9rem;
 }
+
+.comparePage {
+  max-width: 1120px;
+}
+
+.compareTop {
+  margin-bottom: 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.compareRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .compareRow {
+    grid-template-columns: 1fr;
+  }
+}
+
+.compareCol {
+  min-width: 0;
+}
+
+.compareColTitle {
+  margin: 0 0 0.5rem;
+  font-size: 1.2rem;
+}
+
+.compareSubTitle {
+  margin: 1rem 0 0.35rem;
+  font-size: 0.95rem;
+  font-family: inherit;
+  font-weight: 600;
+}
+
+.codePanel {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
+  margin-bottom: 0.65rem;
+}
+
+.codePanelTitle {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface2);
+}
+
+.codePanelPre {
+  margin: 0;
+  padding: 0.6rem 0.65rem;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.articleLinkList {
+  margin: 0.35rem 0 0;
+  padding-left: 1.15rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.lensList {
+  margin: 0.75rem 0 0;
+  padding-left: 1.2rem;
+  line-height: 1.45;
+}
+
+.errorInline {
+  color: var(--err);
+}

@@ -1,4 +1,4 @@
-export type ParallelOpKind = "search" | "extract";
+export type ParallelOpKind = "search" | "extract" | "task" | "findall";
 
 export type ParallelOpStatus = "running" | "completed" | "error";
 

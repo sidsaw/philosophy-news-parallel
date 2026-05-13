@@ -36,6 +36,11 @@ function buildSearchQueries(thinker: string, refinement?: string) {
   return base;
 }
 
+export type SearchCompareRequestLog = {
+  phase: "primary" | "retry";
+  body: Record<string, unknown>;
+};
+
 export async function searchNewsForThinker(params: {
   thinkerName: string;
   refinement?: string;
@@ -44,11 +49,14 @@ export async function searchNewsForThinker(params: {
   maxArticles?: number;
   /** Overrides the default first operation label for UI logs */
   primarySearchLabel?: string;
+  /** When true, echoes each `client.search` payload for compare / debug UI */
+  includeCompareDebug?: boolean;
 }): Promise<{
   articles: NewsArticle[];
   operations: ParallelOperation[];
   sessionId: string | null;
   searchId: string | null;
+  compareDebug?: { requests: SearchCompareRequestLog[] };
 }> {
   const maxArticles = params.maxArticles ?? 5;
   const ops: ParallelOperation[] = [];
@@ -79,6 +87,7 @@ export async function searchNewsForThinker(params: {
   ].join("");
 
   const includeDomains = [...REPUTABLE_NEWS_DOMAINS];
+  const compareRequests: SearchCompareRequestLog[] = [];
 
   let client;
   try {
@@ -86,16 +95,22 @@ export async function searchNewsForThinker(params: {
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Parallel client unavailable";
     ops[0] = { ...ops[0], status: "error", detail: msg };
-    return { articles: [], operations: ops, sessionId: null, searchId: null };
+    return {
+      articles: [],
+      operations: ops,
+      sessionId: null,
+      searchId: null,
+      ...(params.includeCompareDebug ? { compareDebug: { requests: compareRequests } } : {}),
+    };
   }
 
   const runSearch = async (broaden: boolean) => {
-    return client.search({
+    const searchBody = {
       objective: broaden
         ? `${objective} If needed, include closely adjacent stories still clearly tied to this figure.`
         : objective,
       search_queries: queries,
-      mode: "basic",
+      mode: "basic" as const,
       advanced_settings: {
         max_results: Math.min(25, Math.max(maxArticles * 3, 12)),
         source_policy: {
@@ -103,7 +118,14 @@ export async function searchNewsForThinker(params: {
           after_date: "2026-01-01",
         },
       },
-    });
+    };
+    if (params.includeCompareDebug) {
+      compareRequests.push({
+        phase: broaden ? "retry" : "primary",
+        body: searchBody as unknown as Record<string, unknown>,
+      });
+    }
+    return client.search(searchBody);
   };
 
   let response;
@@ -112,7 +134,13 @@ export async function searchNewsForThinker(params: {
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Search failed";
     ops[0] = { ...ops[0], status: "error", detail: msg };
-    return { articles: [], operations: ops, sessionId: null, searchId: null };
+    return {
+      articles: [],
+      operations: ops,
+      sessionId: null,
+      searchId: null,
+      ...(params.includeCompareDebug ? { compareDebug: { requests: compareRequests } } : {}),
+    };
   }
 
   ops[0] = {
@@ -185,6 +213,7 @@ export async function searchNewsForThinker(params: {
     operations: ops,
     sessionId: response.session_id ?? null,
     searchId: response.search_id ?? null,
+    ...(params.includeCompareDebug ? { compareDebug: { requests: compareRequests } } : {}),
   };
 }
 
