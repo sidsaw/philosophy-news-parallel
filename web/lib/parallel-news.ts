@@ -62,7 +62,6 @@ export async function searchNewsForThinker(params: {
     status: "running",
   });
 
-  const client = getParallelClient();
   const queries = buildSearchQueries(params.thinkerName, params.refinement);
   const exclude = (params.excludeUrls ?? []).filter(Boolean);
   const exclusionNote =
@@ -80,6 +79,15 @@ export async function searchNewsForThinker(params: {
   ].join("");
 
   const includeDomains = [...REPUTABLE_NEWS_DOMAINS];
+
+  let client;
+  try {
+    client = getParallelClient();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Parallel client unavailable";
+    ops[0] = { ...ops[0], status: "error", detail: msg };
+    return { articles: [], operations: ops, sessionId: null, searchId: null };
+  }
 
   const runSearch = async (broaden: boolean) => {
     return client.search({
@@ -144,7 +152,7 @@ export async function searchNewsForThinker(params: {
     }
   };
 
-  pushResults(response.results);
+  pushResults(response.results ?? []);
 
   if (mapped.length < maxArticles) {
     const retryOpId = crypto.randomUUID();
@@ -161,7 +169,7 @@ export async function searchNewsForThinker(params: {
         status: "completed",
         detail: `search_id: ${retry.search_id}`,
       };
-      pushResults(retry.results);
+      pushResults(retry.results ?? []);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Search failed";
       ops[ops.length - 1] = {
@@ -198,11 +206,11 @@ export async function extractArticleExcerpt(params: {
     label: `Parallel Extract: ${params.url}`,
     status: "running",
   });
-  const client = getParallelClient();
   const lens = lensLabel(params.lensSlug);
   const objective = `Summarize this news article in clear markdown. Ground every claim in the page. Explain how it connects to ${params.thinkerName.trim()} and the philosophical lens “${lens}”.`;
 
   try {
+    const client = getParallelClient();
     const res = await client.extract({
       urls: [params.url],
       objective,
