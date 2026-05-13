@@ -17,8 +17,6 @@ const LENSES_OUTPUT_SCHEMA: JsonSchema = {
     properties: {
       lenses: {
         type: "array",
-        minItems: 3,
-        maxItems: 3,
         items: {
           type: "object",
           required: ["title", "description"],
@@ -93,6 +91,7 @@ export async function runAnalyticalLensesTask(thinkerName: string): Promise<{
     "a thoughtful reader could use when scanning 2026 news about this figure.",
     "Each lens should have a short title, a paragraph description, and optional guiding questions.",
     "Lenses should be genuinely different (e.g. institutional role vs. ideas vs. public controversy), not rewordings of the same angle.",
+    "Return JSON with a top-level \"lenses\" array containing exactly three objects (no more, no fewer), each with \"title\" and \"description\" strings, and optionally \"guiding_questions\" as an array of strings.",
   ].join(" ");
 
   const createBody = {
