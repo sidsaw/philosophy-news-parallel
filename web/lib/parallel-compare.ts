@@ -65,17 +65,36 @@ function normalizeLenses(raw: unknown): AnalyticalLens[] {
   return out.slice(0, 3);
 }
 
-export async function runAnalyticalLensesTask(thinkerName: string): Promise<{
-  ok: boolean;
-  error?: string;
-  runId?: string;
-  apiCallSnippet: string;
-  resultSnippet: string;
-  lenses: AnalyticalLens[];
-}> {
+function buildLensesTaskInput(thinkerName: string): string {
+  const t = thinkerName.trim();
+  return [
+    `For the philosopher or public intellectual "${t}", define exactly three distinct analytical lenses`,
+    "a thoughtful reader could use when scanning 2026 news about this figure.",
+    "Each lens should have a short title, a paragraph description, and optional guiding questions.",
+    "Lenses should be genuinely different (e.g. institutional role vs. ideas vs. public controversy), not rewordings of the same angle.",
+    "Return JSON with a top-level \"lenses\" array containing exactly three objects (no more, no fewer), each with \"title\" and \"description\" strings, and optionally \"guiding_questions\" as an array of strings.",
+  ].join(" ");
+}
+
+function buildLensesCreateBody(thinkerName: string) {
+  return {
+    input: buildLensesTaskInput(thinkerName),
+    processor: "base",
+    enable_events: true,
+    task_spec: {
+      output_schema: LENSES_OUTPUT_SCHEMA,
+    },
+  };
+}
+
+/** Fast: creates the task run only. Poll with {@link pollAnalyticalLensesTask}. */
+export async function startAnalyticalLensesTask(thinkerName: string): Promise<
+  | { ok: true; runId: string; apiCallSnippet: string }
+  | { ok: false; error: string; apiCallSnippet: string }
+> {
   const t = thinkerName.trim();
   if (!t) {
-    return { ok: false, error: "Missing thinker name", apiCallSnippet: "", resultSnippet: "", lenses: [] };
+    return { ok: false, error: "Missing thinker name", apiCallSnippet: "" };
   }
 
   let client;
@@ -83,80 +102,150 @@ export async function runAnalyticalLensesTask(thinkerName: string): Promise<{
     client = getParallelClient();
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Parallel client unavailable";
-    return { ok: false, error: msg, apiCallSnippet: "", resultSnippet: "", lenses: [] };
+    return { ok: false, error: msg, apiCallSnippet: "" };
   }
 
-  const input = [
-    `For the philosopher or public intellectual "${t}", define exactly three distinct analytical lenses`,
-    "a thoughtful reader could use when scanning 2026 news about this figure.",
-    "Each lens should have a short title, a paragraph description, and optional guiding questions.",
-    "Lenses should be genuinely different (e.g. institutional role vs. ideas vs. public controversy), not rewordings of the same angle.",
-    "Return JSON with a top-level \"lenses\" array containing exactly three objects (no more, no fewer), each with \"title\" and \"description\" strings, and optionally \"guiding_questions\" as an array of strings.",
-  ].join(" ");
-
-  const createBody = {
-    input,
-    processor: "base",
-    enable_events: true,
-    task_spec: {
-      output_schema: LENSES_OUTPUT_SCHEMA,
-    },
-  };
-
+  const createBody = buildLensesCreateBody(t);
   const apiCallSnippet = formatHttpSnippet("POST", "/v1/tasks/runs", createBody);
 
   try {
     const run = await client.taskRun.create(createBody);
-    const result = await client.taskRun.result(run.run_id, { timeout: 120 });
-    const out = result.output;
-    let lenses: AnalyticalLens[] = [];
-    let resultSnippet: string;
+    return { ok: true, runId: run.run_id, apiCallSnippet };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Task create failed";
+    return { ok: false, error: msg, apiCallSnippet };
+  }
+}
 
-    if (out.type === "json") {
-      lenses = normalizeLenses(out.content);
-      resultSnippet = JSON.stringify(
-        { run_id: result.run.run_id, status: result.run.status, output: out.content },
-        null,
-        2,
-      ).slice(0, 24000);
-    } else if (out.type === "text") {
-      resultSnippet = JSON.stringify(
-        { run_id: result.run.run_id, status: result.run.status, output_type: "text", text: out.content },
-        null,
-        2,
-      ).slice(0, 24000);
-      try {
-        const parsed = JSON.parse(out.content) as { lenses?: unknown };
-        lenses = normalizeLenses(parsed);
-      } catch {
-        lenses = [{ title: "Task text output", description: out.content.slice(0, 800) }];
-      }
-    } else {
-      resultSnippet = JSON.stringify(result, null, 2).slice(0, 24000);
+function parseTaskRunCompletedResult(result: {
+  output: { type: string; content?: unknown };
+  run: { run_id: string; status: string; error?: { message?: string | null } | null };
+}): { ok: boolean; error?: string; resultSnippet: string; lenses: AnalyticalLens[] } {
+  const out = result.output;
+  let lenses: AnalyticalLens[] = [];
+  let resultSnippet: string;
+
+  if (out.type === "json" && out.content && typeof out.content === "object") {
+    lenses = normalizeLenses(out.content);
+    resultSnippet = JSON.stringify(
+      { run_id: result.run.run_id, status: result.run.status, output: out.content },
+      null,
+      2,
+    ).slice(0, 24000);
+  } else if (out.type === "text" && typeof (out as { content?: unknown }).content === "string") {
+    const text = (out as { content: string }).content;
+    resultSnippet = JSON.stringify(
+      { run_id: result.run.run_id, status: result.run.status, output_type: "text", text },
+      null,
+      2,
+    ).slice(0, 24000);
+    try {
+      const parsed = JSON.parse(text) as { lenses?: unknown };
+      lenses = normalizeLenses(parsed);
+    } catch {
+      lenses = [{ title: "Task text output", description: text.slice(0, 800) }];
     }
+  } else {
+    resultSnippet = JSON.stringify(result, null, 2).slice(0, 24000);
+  }
 
-    if (result.run.status === "failed") {
-      const errMsg = result.run.error?.message ?? "Task run failed";
+  if (result.run.status === "failed") {
+    const errMsg = result.run.error?.message ?? "Task run failed";
+    return { ok: false, error: errMsg, resultSnippet, lenses };
+  }
+
+  return { ok: true, resultSnippet, lenses };
+}
+
+/**
+ * Short server action: `retrieve` only until the run finishes, then one `result` fetch.
+ * Avoids blocking a single action on `result({ timeout: 120 })`, which can hit Next.js
+ * server-action limits and stall other actions (Search / FindAll).
+ */
+export async function pollAnalyticalLensesTask(runId: string): Promise<{
+  pending: boolean;
+  runStatus: string;
+  ok: boolean;
+  error?: string;
+  resultSnippet: string;
+  lenses: AnalyticalLens[];
+}> {
+  if (!runId.trim()) {
+    return {
+      pending: false,
+      runStatus: "invalid",
+      ok: false,
+      error: "Missing run id",
+      resultSnippet: "",
+      lenses: [],
+    };
+  }
+
+  let client;
+  try {
+    client = getParallelClient();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Parallel client unavailable";
+    return {
+      pending: false,
+      runStatus: "error",
+      ok: false,
+      error: msg,
+      resultSnippet: "",
+      lenses: [],
+    };
+  }
+
+  try {
+    const run = await client.taskRun.retrieve(runId);
+    const st = run.status;
+
+    if (st === "failed" || st === "cancelled") {
+      const errMsg = run.error?.message ?? `Task ${st}`;
       return {
+        pending: false,
+        runStatus: st,
         ok: false,
         error: errMsg,
-        runId: run.run_id,
-        apiCallSnippet,
-        resultSnippet,
-        lenses,
+        resultSnippet: JSON.stringify({ run_id: runId, status: st, error: run.error }, null, 2),
+        lenses: [],
       };
     }
 
+    if (st !== "completed") {
+      return {
+        pending: true,
+        runStatus: st,
+        ok: true,
+        resultSnippet: JSON.stringify(
+          { run_id: runId, status: st, note: "Task still running; this panel updates on each poll." },
+          null,
+          2,
+        ),
+        lenses: [],
+      };
+    }
+
+    const result = await client.taskRun.result(runId, { timeout: 45 });
+    const parsed = parseTaskRunCompletedResult(result);
     return {
-      ok: true,
-      runId: run.run_id,
-      apiCallSnippet,
-      resultSnippet,
-      lenses,
+      pending: false,
+      runStatus: st,
+      ok: parsed.ok,
+      error: parsed.error,
+      resultSnippet: parsed.resultSnippet,
+      lenses: parsed.lenses,
     };
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Task request failed";
-    return { ok: false, error: msg, apiCallSnippet, resultSnippet: "", lenses: [] };
+    const msg = e instanceof Error ? e.message : "Task poll failed";
+    return {
+      pending: false,
+      runStatus: "error",
+      ok: false,
+      error: msg,
+      resultSnippet: "",
+      lenses: [],
+    };
   }
 }
 

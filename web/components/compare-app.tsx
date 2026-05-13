@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  compareLensesAction,
+  compareLensesPollAction,
+  compareLensesStartAction,
   comparePollFindAllAction,
   compareSearchAction,
   compareStartFindAllAction,
@@ -109,8 +110,10 @@ export function CompareApp() {
   const [findAll, setFindAll] = useState<FindAllUi>(initialFindAll);
   const [search, setSearch] = useState<SearchUi>(initialSearch);
   const [findallId, setFindallId] = useState<string | null>(null);
+  const [lensesRunId, setLensesRunId] = useState<string | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollStartRef = useRef<number>(0);
+  const lensesPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const clearPoll = useCallback(() => {
     if (pollTimerRef.current) {
@@ -118,6 +121,74 @@ export function CompareApp() {
       pollTimerRef.current = null;
     }
   }, []);
+
+  const clearLensesPoll = useCallback(() => {
+    if (lensesPollTimerRef.current) {
+      clearInterval(lensesPollTimerRef.current);
+      lensesPollTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    const stableRunId = lensesRunId;
+    if (stableRunId == null || stableRunId === "") return;
+    const lensTaskRunId: string = stableRunId;
+
+    clearLensesPoll();
+    const started = Date.now();
+    let cancelled = false;
+
+    async function tick() {
+      if (cancelled) return;
+      if (Date.now() - started > 300_000) {
+        setLenses((prev) => ({
+          ...prev,
+          status: "error",
+          error: "Task polling timed out after 5 minutes",
+          resultSnippet:
+            prev.resultSnippet || JSON.stringify({ error: "timeout", run_id: lensTaskRunId }, null, 2),
+        }));
+        setLensesRunId(null);
+        clearLensesPoll();
+        return;
+      }
+      try {
+        const p = await compareLensesPollAction(lensTaskRunId);
+        if (cancelled) return;
+        setLenses((prev) => ({
+          ...prev,
+          status: p.pending ? "loading" : p.ok ? "done" : "error",
+          error: !p.pending && !p.ok ? p.error : undefined,
+          resultSnippet: p.resultSnippet,
+          lenses: p.lenses,
+          apiCallSnippet: prev.apiCallSnippet,
+        }));
+        if (!p.pending) {
+          setLensesRunId(null);
+          clearLensesPoll();
+        }
+      } catch (e) {
+        if (cancelled) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        setLenses((prev) => ({
+          ...prev,
+          status: "error",
+          error: msg,
+          apiCallSnippet: prev.apiCallSnippet,
+        }));
+        setLensesRunId(null);
+        clearLensesPoll();
+      }
+    }
+
+    void tick();
+    lensesPollTimerRef.current = setInterval(() => void tick(), 2500);
+
+    return () => {
+      cancelled = true;
+      clearLensesPoll();
+    };
+  }, [lensesRunId, clearLensesPoll]);
 
   useEffect(() => {
     if (!findallId) return;
@@ -184,89 +255,134 @@ export function CompareApp() {
     if (!trimmed) return;
 
     clearPoll();
+    clearLensesPoll();
     setFindallId(null);
+    setLensesRunId(null);
     setLenses({ ...initialLenses, status: "loading" });
     setFindAll({ ...initialFindAll, status: "starting" });
     setSearch({ ...initialSearch, status: "loading" });
 
     void (async () => {
-      const r = await compareLensesAction(trimmed);
-      setLenses({
-        status: r.ok ? "done" : "error",
-        error: r.error,
-        apiCallSnippet: r.apiCallSnippet,
-        resultSnippet: r.resultSnippet,
-        lenses: r.lenses,
-      });
+      try {
+        const r = await compareLensesStartAction(trimmed);
+        if (!r.ok) {
+          setLenses({
+            status: "error",
+            error: r.error,
+            apiCallSnippet: r.apiCallSnippet,
+            resultSnippet: "",
+            lenses: [],
+          });
+          return;
+        }
+        setLenses({
+          status: "loading",
+          apiCallSnippet: r.apiCallSnippet,
+          resultSnippet: "",
+          lenses: [],
+        });
+        setLensesRunId(r.runId);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setLenses({
+          status: "error",
+          error: msg,
+          apiCallSnippet: "",
+          resultSnippet: "",
+          lenses: [],
+        });
+      }
     })();
 
     void (async () => {
-      const r = await compareStartFindAllAction(trimmed);
-      if (!r.ok) {
+      try {
+        const r = await compareStartFindAllAction(trimmed);
+        if (!r.ok) {
+          setFindAll((prev) => ({
+            ...prev,
+            status: "error",
+            error: r.error ?? "FindAll failed to start",
+            ingestSnippet: r.ingestSnippet,
+            createSnippet: r.createSnippet,
+          }));
+          return;
+        }
+        const id = r.findallId;
+        setFindAll((prev) => ({
+          ...prev,
+          status: "polling",
+          ingestSnippet: r.ingestSnippet,
+          createSnippet: r.createSnippet,
+          findallId: id,
+        }));
+        setFindallId(id);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
         setFindAll((prev) => ({
           ...prev,
           status: "error",
-          error: r.error ?? "FindAll failed to start",
-          ingestSnippet: r.ingestSnippet,
-          createSnippet: r.createSnippet,
+          error: msg,
         }));
-        return;
       }
-      const id = r.findallId;
-      setFindAll((prev) => ({
-        ...prev,
-        status: "polling",
-        ingestSnippet: r.ingestSnippet,
-        createSnippet: r.createSnippet,
-        findallId: id,
-      }));
-      setFindallId(id);
     })();
 
     void (async () => {
-      const r = await compareSearchAction(trimmed);
-      if (!r.ok) {
+      try {
+        const r = await compareSearchAction(trimmed);
+        if (!r.ok) {
+          setSearch({
+            status: "error",
+            error: r.error,
+            articles: [],
+            requestSnippets: [],
+            resultSnippet: "",
+            sessionId: null,
+            searchId: null,
+          });
+          return;
+        }
+        const requestSnippets = r.compareDebug.requests.map((req) => ({
+          phase: req.phase,
+          json: JSON.stringify(req.body, null, 2),
+        }));
+        const resultSnippet = JSON.stringify(
+          {
+            search_id: r.searchId,
+            session_id: r.sessionId,
+            article_count: r.articles.length,
+            articles: r.articles.map((a) => ({
+              title: a.title,
+              url: a.url,
+              source: a.source,
+              publish_date: a.publishDate,
+              lens: lensLabel(a.lensSlug),
+            })),
+          },
+          null,
+          2,
+        );
+        setSearch({
+          status: "done",
+          articles: r.articles,
+          requestSnippets,
+          resultSnippet,
+          sessionId: r.sessionId,
+          searchId: r.searchId,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
         setSearch({
           status: "error",
-          error: r.error,
+          error: msg,
           articles: [],
           requestSnippets: [],
           resultSnippet: "",
           sessionId: null,
           searchId: null,
         });
-        return;
       }
-      const requestSnippets = r.compareDebug.requests.map((req) => ({
-        phase: req.phase,
-        json: JSON.stringify(req.body, null, 2),
-      }));
-      const resultSnippet = JSON.stringify(
-        {
-          search_id: r.searchId,
-          session_id: r.sessionId,
-          article_count: r.articles.length,
-          articles: r.articles.map((a) => ({
-            title: a.title,
-            url: a.url,
-            source: a.source,
-            publish_date: a.publishDate,
-            lens: lensLabel(a.lensSlug),
-          })),
-        },
-        null,
-        2,
-      );
-      setSearch({
-        status: "done",
-        articles: r.articles,
-        requestSnippets,
-        resultSnippet,
-        sessionId: r.sessionId,
-        searchId: r.searchId,
-      });
     })();
-  }, [clearPoll]);
+  }, [clearPoll, clearLensesPoll]);
 
   const onSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -285,7 +401,15 @@ export function CompareApp() {
   );
 
   const lensesStatus =
-    lenses.status === "loading" ? "Running…" : lenses.status === "error" ? "Error" : lenses.status === "done" ? "Done" : "Idle";
+    lenses.status === "loading"
+      ? lensesRunId
+        ? "Polling task…"
+        : "Starting task…"
+      : lenses.status === "error"
+        ? "Error"
+        : lenses.status === "done"
+          ? "Done"
+          : "Idle";
 
   const findAllStatusLabel =
     findAll.status === "starting"

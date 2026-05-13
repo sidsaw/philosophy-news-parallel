@@ -1,14 +1,19 @@
 "use server";
 
 import {
+  pollAnalyticalLensesTask,
   pollFindAllArticlesSnapshot,
-  runAnalyticalLensesTask,
+  startAnalyticalLensesTask,
   startFindAllArticlesForThinker,
 } from "@/lib/parallel-compare";
 import { searchNewsForThinker } from "@/lib/parallel-news";
 
-export async function compareLensesAction(thinkerName: string) {
-  return runAnalyticalLensesTask(thinkerName);
+export async function compareLensesStartAction(thinkerName: string) {
+  return startAnalyticalLensesTask(thinkerName);
+}
+
+export async function compareLensesPollAction(runId: string) {
+  return pollAnalyticalLensesTask(runId);
 }
 
 export async function compareStartFindAllAction(thinkerName: string) {
